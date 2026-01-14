@@ -1,5 +1,6 @@
 // Hazırlayan: İkram MERT ikram_mert@hotmail.com
 // Fan Sürekli çalıacağından Fan kontrolü yorum satırına alınmıştır.
+#include <ArduinoOTA.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
@@ -7,18 +8,19 @@
 #include <DallasTemperature.h>
 #include <EEPROM.h>
 #include <ESP8266WiFi.h>
+#include "secrets.h"
 
 // Blynk kütüphanesi
-#define BLYNK_TEMPLATE_ID "BLYNK_TEMPLATE_ID"  // Blynk konsolundan alacağınız
-#define BLYNK_TEMPLATE_NAME "Quickstart Template"
-#define BLYNK_AUTH_TOKEN "BLYNK_AUTH_TOKEN"  // Blynk auth token
+#define BLYNK_TEMPLATE_ID SECRET_BLYNK_TEMPLATE_ID
+#define BLYNK_TEMPLATE_NAME SECRET_BLYNK_TEMPLATE_NAME
+#define BLYNK_AUTH_TOKEN SECRET_BLYNK_AUTH_TOKEN  // Blynk auth token
 
 #define BLYNK_PRINT Serial
 #include <BlynkSimpleEsp8266.h>
 
 // Wifi Ağı
-#define SSID          "SSID"
-#define WIFI_PASSWORD "WIFI_PASSWORD"
+#define SSID          SECRET_SSID
+#define WIFI_PASSWORD SECRET_PASS
 
 // Donanım 
 #define DHTPIN D5
@@ -90,7 +92,7 @@ unsigned long lastEEPROMSaveMs = 0;
 unsigned long wifiReconnectTime = 0;
 
 // Tolerans değerleri (ne kadar fark olursa veri gönderilsin)
-const float TEMP_TOLERANCE = 0.2; // Sürekli değişim gürültüsünü azaltmak için
+const float TEMP_TOLERANCE = 0.3; // Sürekli değişim gürültüsünü azaltmak için
 const float HUM_TOLERANCE = 1.0;
 
 struct SensorData {
@@ -359,6 +361,48 @@ void setup(){
   
   lcd.clear();
   Serial.println("Sistem hazır!");
+  // OTA Ayarları
+  ArduinoOTA.setHostname("Kulucka-Makinesi-ESP8266");
+  //ArduinoOTA.setPassword("pass"); // İstersen şifre koy
+  
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+    Serial.println("OTA Başladı: " + type);
+    lcd.clear();
+    lcd.print("OTA Yukleniyor");
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nOTA Tamamlandı");
+    lcd.clear();
+    lcd.print("OTA Basarili!");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    int percent = (progress / (total / 100));
+    Serial.printf("İlerleme: %u%%\r", percent);
+    lcd.setCursor(0, 1);
+    lcd.print("%" + String(percent));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Hata[%u]: ", error);
+    lcd.clear();
+    lcd.print("OTA Hatasi!");
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("OTA hazır!");
 }
 
 void loop(){
@@ -369,6 +413,7 @@ void loop(){
   
   // Blynk işlemlerini çalıştır (sadece WiFi bağlıysa)
   if (wifiConnected) {
+    ArduinoOTA.handle();
     Blynk.run();
     checkBlynkConnection();
   }
