@@ -90,7 +90,7 @@ unsigned long lastEEPROMSaveMs = 0;
 unsigned long wifiReconnectTime = 0;
 
 // Tolerans değerleri (ne kadar fark olursa veri gönderilsin)
-const float TEMP_TOLERANCE = 0.1;
+const float TEMP_TOLERANCE = 0.2; // Sürekli değişim gürültüsünü azaltmak için
 const float HUM_TOLERANCE = 1.0;
 
 struct SensorData {
@@ -390,7 +390,7 @@ void loop(){
     //}
     
     // Blynk'e veri gönderme (sadece bağlıysa ve değişiklik varsa)
-    if (currentTime - lastBlynkSendMs >= 5000) {
+    if (currentTime - lastBlynkSendMs >= 20000) { // Her 20 saniyede bir (Blynk Veri sınırını aşmamak için)
       sendToBlynk(sensorData);
       lastBlynkSendMs = currentTime;
     }
