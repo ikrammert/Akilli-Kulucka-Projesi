@@ -1,5 +1,6 @@
 // Hazırlayan: İkram MERT ikram_mert@hotmail.com
 // Fan Sürekli çalıacağından Fan kontrolü yorum satırına alınmıştır.
+#include <ArduinoOTA.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
@@ -359,6 +360,48 @@ void setup(){
   
   lcd.clear();
   Serial.println("Sistem hazır!");
+  // OTA Ayarları
+  ArduinoOTA.setHostname("Kulucka-Makinesi-ESP8266");
+  //ArduinoOTA.setPassword("pass"); // İstersen şifre koy
+  
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+    Serial.println("OTA Başladı: " + type);
+    lcd.clear();
+    lcd.print("OTA Yukleniyor");
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nOTA Tamamlandı");
+    lcd.clear();
+    lcd.print("OTA Basarili!");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    int percent = (progress / (total / 100));
+    Serial.printf("İlerleme: %u%%\r", percent);
+    lcd.setCursor(0, 1);
+    lcd.print("%" + String(percent));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Hata[%u]: ", error);
+    lcd.clear();
+    lcd.print("OTA Hatasi!");
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("OTA hazır!");
 }
 
 void loop(){
@@ -369,6 +412,7 @@ void loop(){
   
   // Blynk işlemlerini çalıştır (sadece WiFi bağlıysa)
   if (wifiConnected) {
+    ArduinoOTA.handle();
     Blynk.run();
     checkBlynkConnection();
   }
