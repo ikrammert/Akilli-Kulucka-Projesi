@@ -8,18 +8,19 @@
 #include <DallasTemperature.h>
 #include <EEPROM.h>
 #include <ESP8266WiFi.h>
+#include "secrets.h"
 
 // Blynk kütüphanesi
-#define BLYNK_TEMPLATE_ID "BLYNK_TEMPLATE_ID"  // Blynk konsolundan alacağınız
-#define BLYNK_TEMPLATE_NAME "Quickstart Template"
-#define BLYNK_AUTH_TOKEN "BLYNK_AUTH_TOKEN"  // Blynk auth token
+#define BLYNK_TEMPLATE_ID SECRET_BLYNK_TEMPLATE_ID
+#define BLYNK_TEMPLATE_NAME SECRET_BLYNK_TEMPLATE_NAME
+#define BLYNK_AUTH_TOKEN SECRET_BLYNK_AUTH_TOKEN  // Blynk auth token
 
 #define BLYNK_PRINT Serial
 #include <BlynkSimpleEsp8266.h>
 
 // Wifi Ağı
-#define SSID          "SSID"
-#define WIFI_PASSWORD "WIFI_PASSWORD"
+#define SSID          SECRET_SSID
+#define WIFI_PASSWORD SECRET_PASS
 
 // Donanım 
 #define DHTPIN D5
@@ -91,7 +92,7 @@ unsigned long lastEEPROMSaveMs = 0;
 unsigned long wifiReconnectTime = 0;
 
 // Tolerans değerleri (ne kadar fark olursa veri gönderilsin)
-const float TEMP_TOLERANCE = 0.2; // Sürekli değişim gürültüsünü azaltmak için
+const float TEMP_TOLERANCE = 0.3; // Sürekli değişim gürültüsünü azaltmak için
 const float HUM_TOLERANCE = 1.0;
 
 struct SensorData {
