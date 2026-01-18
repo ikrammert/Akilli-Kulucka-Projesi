@@ -1,5 +1,7 @@
 // Hazırlayan: İkram MERT ikram_mert@hotmail.com
-// Fan Sürekli çalıacağından Fan kontrolü yorum satırına alınmıştır.
+// Event Tabanlı - Minimum Blynk Kota Kullanımı
+// Sadece sorun olduğunda bildirim gönderir!
+
 #include <ArduinoOTA.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
@@ -13,7 +15,7 @@
 // Blynk kütüphanesi
 #define BLYNK_TEMPLATE_ID SECRET_BLYNK_TEMPLATE_ID
 #define BLYNK_TEMPLATE_NAME SECRET_BLYNK_TEMPLATE_NAME
-#define BLYNK_AUTH_TOKEN SECRET_BLYNK_AUTH_TOKEN  // Blynk auth token
+#define BLYNK_AUTH_TOKEN SECRET_BLYNK_AUTH_TOKEN
 
 #define BLYNK_PRINT Serial
 #include <BlynkSimpleEsp8266.h>
@@ -36,9 +38,9 @@
 #define V_SET_HUM         V3   // Hedef nem ayarı
 #define V_HEAT_STATE      V4   // Isıtıcı durumu LED
 #define V_HUM_STATE       V5   // Nem modülü durumu LED
-// #define V_WIFI_STATE      V6   // WiFi durum LED
 #define V_QUICK1          V7   // Quick Set 1 butonu
 #define V_QUICK2          V8   // Quick Set 2 butonu
+#define V_REFRESH         V9   // Manuel güncelleme butonu (YENİ!)
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 DHT dht(DHTPIN, DHTTYPE);
@@ -49,11 +51,13 @@ DallasTemperature tempSensor(&oneWire);
 #define EEPROM_SIZE 64
 #define TEMP_ADDR 0
 #define HUM_ADDR 10
+
 float EEPROMReadFloat(int addr){
   float x=0; byte *p=(byte*)&x;
   for(int i=0;i<4;i++) *p++=EEPROM.read(addr+i);
   return x;
 }
+
 void EEPROMWriteFloat(int addr,float x){
   byte *p=(byte*)&x;
   for(int i=0;i<4;i++) EEPROM.write(addr+i,*p++);
@@ -82,18 +86,30 @@ float lastSentSetTemp = -999;
 float lastSentSetHum = -999;
 bool lastSentLampState = false;
 bool lastSentHumidState = false;
-bool lastSentWifiState = false;
+
+// Alarm durumları (Event için)
+bool tempAlarmSent = false;
+bool humAlarmSent = false;
+unsigned long lastTempAlarmMs = 0;
+unsigned long lastHumAlarmMs = 0;
+unsigned long lastPeriodicUpdateMs = 0;
+
+// Alarm ayarları
+const unsigned long ALARM_COOLDOWN = 600000; // 10 dakika (ms)
 
 // Zamanlama değişkenleri
 unsigned long lastSensorMs = 0;
-unsigned long lastBlynkSendMs = 0;
-unsigned long lastLCDUpdateMs = 0;
-unsigned long lastEEPROMSaveMs = 0;
 unsigned long wifiReconnectTime = 0;
 
-// Tolerans değerleri (ne kadar fark olursa veri gönderilsin)
-const float TEMP_TOLERANCE = 0.3; // Sürekli değişim gürültüsünü azaltmak için
-const float HUM_TOLERANCE = 1.0;
+// Tolerans değerleri
+const float TEMP_TOLERANCE = 0.3;
+const float HUM_TOLERANCE = 2.0;
+
+// Alarm eşikleri
+const float TEMP_ALARM_LOW = 37.0;   // Çok düşük sıcaklık alarmı
+const float TEMP_ALARM_HIGH = 39.0;  // Çok yüksek sıcaklık alarmı
+const float HUM_ALARM_LOW = 40.0;    // Çok düşük nem alarmı
+const float HUM_ALARM_HIGH = 80.0;   // Çok yüksek nem alarmı
 
 struct SensorData {
   float temperature;
@@ -130,13 +146,12 @@ void updateLCD(const SensorData &data) {
   if (blynkConnected) {
     lcd.print("ON ");
   } else if (wifiConnected) {
-    lcd.print("W? ");  // WiFi var ama Blynk yok
+    lcd.print("W? ");
   } else {
     lcd.print("OFF");
   }
 }
 
-// Isıtıcı kontrolü
 void controlHeater(float temperature) {
   if (isnan(temperature)) return;
   
@@ -154,7 +169,6 @@ void controlHeater(float temperature) {
   }
 }
 
-// Nem kontrolü
 void controlHumidifier(float humidity) {
   if (isnan(humidity)) return;
   
@@ -182,60 +196,120 @@ void saveToEEPROM(){
   }
 }
 
-// Blynk'e veri gönderme (sadece değişiklik varsa)
-void sendToBlynk(const SensorData &data) {
+/* Event kontrolü - FREE PLAN İÇİN Notification kullanıyor!
+void checkAndSendEvents(const SensorData &data) {
   if (!blynkConnected) return;
   
-  // Sıcaklık gönder (değişiklik varsa)
-  if (!isnan(data.temperature) && abs(data.temperature - lastSentTemp) >= TEMP_TOLERANCE) {
+  unsigned long currentTime = millis();
+  
+  // Sıcaklık alarmı kontrolü
+  if (!isnan(data.temperature)) {
+    bool canSendTempAlarm = (currentTime - lastTempAlarmMs >= ALARM_COOLDOWN);
+    
+    if (data.temperature < TEMP_ALARM_LOW && canSendTempAlarm) {
+      // FREE PLAN: Event yerine Notification kullanıyoruz
+      Blynk.notify(String("⚠️ Sıcaklık çok düşük: ") + String(data.temperature, 1) + "°C");
+      lastTempAlarmMs = currentTime;
+      tempAlarmSent = true;
+      Serial.println("⚠️ Düşük sıcaklık alarmı gönderildi! (10dk cooldown)");
+    } 
+    else if (data.temperature > TEMP_ALARM_HIGH && canSendTempAlarm) {
+      Blynk.notify(String("⚠️ Sıcaklık çok yüksek: ") + String(data.temperature, 1) + "°C");
+      lastTempAlarmMs = currentTime;
+      tempAlarmSent = true;
+      Serial.println("⚠️ Yüksek sıcaklık alarmı gönderildi! (10dk cooldown)");
+    }
+    else if (data.temperature >= TEMP_ALARM_LOW && data.temperature <= TEMP_ALARM_HIGH) {
+      if (tempAlarmSent) {
+        Serial.println("✅ Sıcaklık normal seviyeye döndü");
+        tempAlarmSent = false;
+      }
+    }
+  }
+  
+  // Nem alarmı kontrolü
+  if (!isnan(data.humidity)) {
+    bool canSendHumAlarm = (currentTime - lastHumAlarmMs >= ALARM_COOLDOWN);
+    
+    if (data.humidity < HUM_ALARM_LOW && canSendHumAlarm) {
+      Blynk.notify(String("⚠️ Nem çok düşük: ") + String(data.humidity, 0) + "%");
+      lastHumAlarmMs = currentTime;
+      humAlarmSent = true;
+      Serial.println("⚠️ Düşük nem alarmı gönderildi! (10dk cooldown)");
+    }
+    else if (data.humidity > HUM_ALARM_HIGH && canSendHumAlarm) {
+      Blynk.notify(String("⚠️ Nem çok yüksek: ") + String(data.humidity, 0) + "%");
+      lastHumAlarmMs = currentTime;
+      humAlarmSent = true;
+      Serial.println("⚠️ Yüksek nem alarmı gönderildi! (10dk cooldown)");
+    }
+    else if (data.humidity >= HUM_ALARM_LOW && data.humidity <= HUM_ALARM_HIGH) {
+      if (humAlarmSent) {
+        Serial.println("✅ Nem normal seviyeye döndü");
+        humAlarmSent = false;
+      }
+    }
+  }
+}*/
+
+// Periyodik güncelleme (günde 2 kez - sabah/akşam)
+void sendPeriodicUpdate(const SensorData &data) {
+  if (!blynkConnected) return;
+  
+  unsigned long currentTime = millis();
+  // 12 saatte bir güncelleme (43200000 ms)
+  if (currentTime - lastPeriodicUpdateMs < 43200000) return;
+  lastPeriodicUpdateMs = currentTime;
+  
+  Serial.println("Periyodik güncelleme gönderiliyor...");
+  
+  if (!isnan(data.temperature)) {
     Blynk.virtualWrite(V_CURRENT_TEMP, data.temperature);
-    //Blynk.virtualWrite(V_TEMP_GAUGE, data.temperature);
     lastSentTemp = data.temperature;
   }
   
-  // Nem gönder (değişiklik varsa)
-  if (!isnan(data.humidity) && abs(data.humidity - lastSentHum) >= HUM_TOLERANCE) {
+  if (!isnan(data.humidity)) {
     Blynk.virtualWrite(V_CURRENT_HUM, data.humidity);
-    //Blynk.virtualWrite(V_HUM_GAUGE, data.humidity);
     lastSentHum = data.humidity;
   }
   
-  // Hedef değerler gönder (değişiklik varsa)
-  if (abs(setTemperature - lastSentSetTemp) >= TEMP_TOLERANCE) {
-    Blynk.virtualWrite(V_SET_TEMP, setTemperature);
-    lastSentSetTemp = setTemperature;
-  }
+  Blynk.virtualWrite(V_SET_TEMP, setTemperature);
+  Blynk.virtualWrite(V_SET_HUM, setHumidity);
+  Blynk.virtualWrite(V_HEAT_STATE, lampState ? 1 : 0);
+  Blynk.virtualWrite(V_HUM_STATE, humidState ? 1 : 0);
   
-  if (abs(setHumidity - lastSentSetHum) >= HUM_TOLERANCE) {
-    Blynk.virtualWrite(V_SET_HUM, setHumidity);
-    lastSentSetHum = setHumidity;
-  }
-  
-  // Röle durumları gönder (değişiklik varsa)
-  if (lampState != lastSentLampState) {
-    Blynk.virtualWrite(V_HEAT_STATE, lampState ? 1 : 0);
-    lastSentLampState = lampState;
-  }
-  
-  if (humidState != lastSentHumidState) {
-    Blynk.virtualWrite(V_HUM_STATE, humidState ? 1 : 0);
-    lastSentHumidState = humidState;
-  }
-  
-  // WiFi durumu gönder (değişiklik varsa)
-  if (wifiConnected != lastSentWifiState) {
-    //Blynk.virtualWrite(V_WIFI_STATE, wifiConnected ? 1 : 0);
-    lastSentWifiState = wifiConnected;
-  }
+  lastSentSetTemp = setTemperature;
+  lastSentSetHum = setHumidity;
+  lastSentLampState = lampState;
+  lastSentHumidState = humidState;
 }
 
-// Blynk bağlantı kontrolü
+// Manuel güncelleme (Kullanıcı butona bastığında)
+void sendManualUpdate(const SensorData &data) {
+  if (!blynkConnected) return;
+  
+  Serial.println("Manuel güncelleme yapılıyor...");
+  
+  if (!isnan(data.temperature)) {
+    Blynk.virtualWrite(V_CURRENT_TEMP, data.temperature);
+  }
+  
+  if (!isnan(data.humidity)) {
+    Blynk.virtualWrite(V_CURRENT_HUM, data.humidity);
+  }
+  
+  Blynk.virtualWrite(V_SET_TEMP, setTemperature);
+  Blynk.virtualWrite(V_SET_HUM, setHumidity);
+  Blynk.virtualWrite(V_HEAT_STATE, lampState ? 1 : 0);
+  Blynk.virtualWrite(V_HUM_STATE, humidState ? 1 : 0);
+}
+
 void checkBlynkConnection() {
   blynkConnected = Blynk.connected();
   
   if (!blynkConnected && wifiConnected) {
     static unsigned long lastReconnectAttempt = 0;
-    if (millis() - lastReconnectAttempt > 30000) { // 30 saniyede bir dene
+    if (millis() - lastReconnectAttempt > 30000) {
       Serial.println("Blynk'e yeniden bağlanmaya çalışılıyor...");
       Blynk.connect();
       lastReconnectAttempt = millis();
@@ -243,7 +317,6 @@ void checkBlynkConnection() {
   }
 }
 
-// WiFi bağlantı kontrolü
 void checkWiFiConnection() {
   bool currentWifiState = (WiFi.status() == WL_CONNECTED);
   
@@ -257,8 +330,7 @@ void checkWiFiConnection() {
     }
   }
   
-  // WiFi yoksa yeniden bağlanmaya çalış
-  if (!wifiConnected && millis() - wifiReconnectTime > 300000) { // 5 dakikada bir
+  if (!wifiConnected && millis() - wifiReconnectTime > 300000) {
     Serial.println("WiFi'ye yeniden bağlanmaya çalışılıyor...");
     WiFi.begin(SSID, WIFI_PASSWORD);
     wifiReconnectTime = millis();
@@ -286,8 +358,6 @@ BLYNK_WRITE(V_QUICK1) {
     setHumidity = quick1Hum;
     saveToEEPROM();
     Serial.println("Quick Set 1 uygulandı");
-    
-    // Butonu sıfırla
     Blynk.virtualWrite(V_QUICK1, 0);
   }
 }
@@ -298,25 +368,31 @@ BLYNK_WRITE(V_QUICK2) {
     setHumidity = quick2Hum;
     saveToEEPROM();
     Serial.println("Quick Set 2 uygulandı");
-    
-    // Butonu sıfırla
     Blynk.virtualWrite(V_QUICK2, 0);
   }
 }
 
-// Blynk bağlantı olayları
+// YENİ: Manuel güncelleme butonu
+BLYNK_WRITE(V_REFRESH) {
+  if (param.asInt() == 1) {
+    SensorData currentData = readSensors();
+    sendManualUpdate(currentData);
+    Serial.println("Manuel güncelleme tamamlandı");
+    Blynk.virtualWrite(V_REFRESH, 0); // Butonu sıfırla
+  }
+}
+
 BLYNK_CONNECTED() {
   Serial.println("Blynk'e bağlanıldı!");
   blynkConnected = true;
   
-  // İlk bağlantıda tüm verileri gönder
+  // İlk bağlantıda hemen güncelle
   lastSentTemp = -999;
   lastSentHum = -999;
   lastSentSetTemp = -999;
   lastSentSetHum = -999;
   lastSentLampState = !lampState;
   lastSentHumidState = !humidState;
-  lastSentWifiState = !wifiConnected;
 }
 
 BLYNK_DISCONNECTED() {
@@ -324,7 +400,6 @@ BLYNK_DISCONNECTED() {
   blynkConnected = false;
 }
 
-// Setup 
 void setup(){
   Serial.begin(9600);
   pinMode(RELAY1,OUTPUT); pinMode(RELAY2,OUTPUT);
@@ -349,8 +424,43 @@ void setup(){
     delay(500); Serial.print(".");
   }
   wifiConnected=(WiFi.status()==WL_CONNECTED);
+  
   if (wifiConnected) {
     Serial.println("\nWiFi bağlandı: " + WiFi.localIP().toString());
+    
+    // OTA Ayarları
+    ArduinoOTA.setHostname("Kulucka-Makinesi-ESP8266");
+    
+    ArduinoOTA.onStart([]() {
+      String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+      Serial.println("OTA Başladı: " + type);
+      lcd.clear();
+      lcd.print("OTA Yukleniyor");
+    });
+    
+    ArduinoOTA.onEnd([]() {
+      Serial.println("\nOTA Tamamlandı");
+      lcd.clear();
+      lcd.print("OTA Basarili!");
+    });
+    
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      int percent = (progress / (total / 100));
+      Serial.printf("İlerleme: %u%%\r", percent);
+      lcd.setCursor(0, 1);
+      lcd.print("%");
+      lcd.print(percent);
+      lcd.print("  ");
+    });
+    
+    ArduinoOTA.onError([](ota_error_t error) {
+      Serial.printf("OTA Hata[%u]: ", error);
+      lcd.clear();
+      lcd.print("OTA Hatasi!");
+    });
+    
+    ArduinoOTA.begin();
+    Serial.println("OTA hazır!");
     
     // Blynk başlatma
     Blynk.config(BLYNK_AUTH_TOKEN);
@@ -361,84 +471,37 @@ void setup(){
   
   lcd.clear();
   Serial.println("Sistem hazır!");
-  // OTA Ayarları
-  ArduinoOTA.setHostname("Kulucka-Makinesi-ESP8266");
-  //ArduinoOTA.setPassword("pass"); // İstersen şifre koy
-  
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else { // U_FS
-      type = "filesystem";
-    }
-    Serial.println("OTA Başladı: " + type);
-    lcd.clear();
-    lcd.print("OTA Yukleniyor");
-  });
-  
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nOTA Tamamlandı");
-    lcd.clear();
-    lcd.print("OTA Basarili!");
-  });
-  
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    int percent = (progress / (total / 100));
-    Serial.printf("İlerleme: %u%%\r", percent);
-    lcd.setCursor(0, 1);
-    lcd.print("%" + String(percent));
-  });
-  
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Hata[%u]: ", error);
-    lcd.clear();
-    lcd.print("OTA Hatasi!");
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
-  });
-  
-  ArduinoOTA.begin();
-  Serial.println("OTA hazır!");
 }
 
 void loop(){
   unsigned long currentTime=millis();
 
-  // WiFi durumunu kontrol et
   checkWiFiConnection();
   
-  // Blynk işlemlerini çalıştır (sadece WiFi bağlıysa)
   if (wifiConnected) {
     ArduinoOTA.handle();
     Blynk.run();
     checkBlynkConnection();
   }
 
-  // Sensör okuma ve kontrol (her 2 saniyede bir)
+  // Sensör okuma - 2 saniyede bir
   if (currentTime - lastSensorMs >= 2000) {
     lastSensorMs = currentTime;
     
     SensorData sensorData = readSensors();
     
-    // Kontrol sistemleri (offline da çalışır)
+    // Kontrol sistemleri (her zaman çalışır)
     controlHeater(sensorData.temperature);
     controlHumidifier(sensorData.humidity);
     
-    // LCD güncelleme (her seferinde değil, 3 saniyede bir)
-    //if (currentTime - lastLCDUpdateMs >= 3000) {
+    // LCD her sensör okumasında güncellenir
     updateLCD(sensorData);
-    //  lastLCDUpdateMs = currentTime;
-    //}
     
-    // Blynk'e veri gönderme (sadece bağlıysa ve değişiklik varsa)
-    if (currentTime - lastBlynkSendMs >= 20000) { // Her 20 saniyede bir (Blynk Veri sınırını aşmamak için)
-      sendToBlynk(sensorData);
-      lastBlynkSendMs = currentTime;
-    }
+    // Event kontrolü (sorun varsa bildirim gönder)
+    //checkAndSendEvents(sensorData);
+    
+    // Periyodik güncelleme (12 saatte bir)
+    sendPeriodicUpdate(sensorData);
   }
 
   delay(10);
