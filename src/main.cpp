@@ -25,10 +25,10 @@
 #define WIFI_PASSWORD SECRET_PASS
 
 // Donanım 
-#define DHTPIN D8
+#define DHTPIN D5
 #define DHTTYPE DHT11
 #define ONE_WIRE_BUS D6
-#define RELAY1 D5   // Lamba
+#define RELAY1 D8   // Lamba
 #define RELAY2 D7   // Nem modülü
 
 // Blynk Virtual Pin tanımlamaları
@@ -153,7 +153,15 @@ void updateLCD(const SensorData &data) {
 }
 
 void controlHeater(float temperature) {
-  if (isnan(temperature)) return;
+  // Hata kontrolü: -127 veya NAN ise röleyi kapat
+  if (isnan(temperature) || temperature == -127.00 || temperature < -100) {
+    if (lampState) {
+      digitalWrite(RELAY1, LOW);
+      lampState = false;
+      Serial.println("⚠️ Sensör hatası - Isıtıcı GÜVENLİK KAPAMASI!");
+    }
+    return;
+  }
   
   bool shouldHeat = temperature < (setTemperature - 0.5);
   bool shouldStop = temperature > setTemperature;
@@ -161,16 +169,24 @@ void controlHeater(float temperature) {
   if (shouldHeat && !lampState) {
     digitalWrite(RELAY1, HIGH);
     lampState = true;
-    Serial.println("Isıtıcı açıldı");
+    Serial.println("🔥 Isıtıcı açıldı");
   } else if (shouldStop && lampState) {
     digitalWrite(RELAY1, LOW);
     lampState = false;
-    Serial.println("Isıtıcı kapatıldı");
+    Serial.println("✅ Isıtıcı kapatıldı");
   }
 }
 
 void controlHumidifier(float humidity) {
-  if (isnan(humidity)) return;
+  // Hata kontrolü: NAN ise röleyi kapat
+  if (isnan(humidity) || humidity < 0 || humidity > 100) {
+    if (humidState) {
+      digitalWrite(RELAY2, LOW);
+      humidState = false;
+      Serial.println("⚠️ Nem sensörü hatası - Nem modülü GÜVENLİK KAPAMASI!");
+    }
+    return;
+  }
   
   bool shouldHumidify = humidity < (setHumidity - 2.0);
   bool shouldStop = humidity > (setHumidity + 3.0);
@@ -178,11 +194,11 @@ void controlHumidifier(float humidity) {
   if (shouldHumidify && !humidState) {
     digitalWrite(RELAY2, HIGH);
     humidState = true;
-    Serial.println("Nem modülü açıldı");
+    Serial.println("💧 Nem modülü açıldı");
   } else if (shouldStop && humidState) {
     digitalWrite(RELAY2, LOW);
     humidState = false;
-    Serial.println("Nem modülü kapatıldı");
+    Serial.println("✅ Nem modülü kapatıldı");
   }
 }
 
