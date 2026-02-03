@@ -25,10 +25,10 @@
 #define WIFI_PASSWORD SECRET_PASS
 
 // Donanım 
-#define DHTPIN D5
+#define DHTPIN D8
 #define DHTTYPE DHT11
 #define ONE_WIRE_BUS D6
-#define RELAY1 D8   // Lamba
+#define RELAY1 D5   // Lamba
 #define RELAY2 D7   // Nem modülü
 
 // Blynk Virtual Pin tanımlamaları
@@ -492,6 +492,7 @@ void loop(){
     
     // Kontrol sistemleri (her zaman çalışır)
     controlHeater(sensorData.temperature);
+    Serial.println("Sıcaklık: " + String(sensorData.temperature,1) + "°C, Nem: " + String(sensorData.humidity,0) + "%");
     controlHumidifier(sensorData.humidity);
     
     // LCD her sensör okumasında güncellenir
